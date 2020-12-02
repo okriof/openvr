@@ -132,6 +132,7 @@ private:
 		vr::VRActionHandle_t m_actionPose = vr::k_ulInvalidActionHandle;
 		vr::VRActionHandle_t m_actionHaptic = vr::k_ulInvalidActionHandle;
 		Matrix4 m_rmat4Pose;
+		Vector4 m_vecPointingDirection;
 		CGLRenderModel *m_pRenderModel = nullptr;
 		std::string m_sRenderModelName;
 		bool m_bShowController;
@@ -191,6 +192,7 @@ private: // OpenGL bookkeeping
 	Matrix4 m_mat4HMDPose;
 	Matrix4 m_mat4eyePosLeft;
 	Matrix4 m_mat4eyePosRight;
+	Matrix4 m_mat4GlobalTranslation;
 
 	Matrix4 m_mat4ProjectionCenter;
 	Matrix4 m_mat4ProjectionLeft;
@@ -505,6 +507,9 @@ bool CMainApplication::BInit()
 	std::string strWindowTitle = "hellovr - " + m_strDriver + " " + m_strDisplay;
 	SDL_SetWindowTitle( m_pCompanionWindow, strWindowTitle.c_str() );
 	
+	// Global translation
+	m_mat4GlobalTranslation.identity();
+
 	// cube array
  	m_iSceneVolumeWidth = m_iSceneVolumeInit;
  	m_iSceneVolumeHeight = m_iSceneVolumeInit;
@@ -752,6 +757,7 @@ bool CMainApplication::HandleInput()
 	{
 		m_vAnalogValue[0] = analogData.x;
 		m_vAnalogValue[1] = analogData.y;
+		//dprintf("Analog xyz:  %f,   %f,   %f\n", analogData.x, analogData.y, analogData.z);
 	}
 
 	m_rHand[Left].m_bShowController = true;
@@ -811,6 +817,10 @@ void CMainApplication::RunMainLoop()
 
 	while ( !bQuit )
 	{
+		const float speed = 0.1 * m_vAnalogValue[1]; // TODO: scale with elapsed time!!!
+		m_mat4GlobalTranslation[12] -= speed * m_rHand[EHand::Right].m_vecPointingDirection.x;
+		m_mat4GlobalTranslation[13] -= speed * m_rHand[EHand::Right].m_vecPointingDirection.y;
+		m_mat4GlobalTranslation[14] -= speed * m_rHand[EHand::Right].m_vecPointingDirection.z;
 		bQuit = HandleInput();
 
 		RenderFrame();
@@ -1282,8 +1292,8 @@ void CMainApplication::RenderControllerAxes()
 
 	for ( EHand eHand = Left; eHand <= Right; ((int&)eHand)++ )
 	{
-		if ( !m_rHand[eHand].m_bShowController )
-			continue;
+		//if ( !m_rHand[eHand].m_bShowController )
+		//	continue;
 
 		const Matrix4 & mat = m_rHand[eHand].m_rmat4Pose;
 
@@ -1316,8 +1326,10 @@ void CMainApplication::RenderControllerAxes()
 		}
 
 		Vector4 start = mat * Vector4( 0, 0, -0.02f, 1 );
-		Vector4 end = mat * Vector4( 0, 0, -39.f, 1 );
+		Vector4 end = mat * Vector4( 0, 0, -1.f * (m_vAnalogValue[1]+1), 1 );
 		Vector3 color( .92f, .92f, .71f );
+
+		m_rHand[eHand].m_vecPointingDirection = mat * Vector4(0, 0, -1, 0); // mat*[0 0 -1 1] - mat*[0 0 0 1]
 
 		vertdataarray.push_back( start.x );vertdataarray.push_back( start.y );vertdataarray.push_back( start.z );
 		vertdataarray.push_back( color.x );vertdataarray.push_back( color.y );vertdataarray.push_back( color.z );
@@ -1542,7 +1554,8 @@ void CMainApplication::RenderScene( vr::Hmd_Eye nEye )
 	if( m_bShowCubes )
 	{
 		glUseProgram( m_unSceneProgramID );
-		glUniformMatrix4fv( m_nSceneMatrixLocation, 1, GL_FALSE, GetCurrentViewProjectionMatrix( nEye ).get() );
+		Matrix4 viewProjWithGlobal = GetCurrentViewProjectionMatrix(nEye) * m_mat4GlobalTranslation;
+		glUniformMatrix4fv( m_nSceneMatrixLocation, 1, GL_FALSE, viewProjWithGlobal.get() );
 		glBindVertexArray( m_unSceneVAO );
 		glBindTexture( GL_TEXTURE_2D, m_iTexture );
 		glDrawArrays( GL_TRIANGLES, 0, m_uiVertcount );
