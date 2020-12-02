@@ -189,6 +189,10 @@ private: // OpenGL bookkeeping
 	GLuint m_unControllerVAO;
 	unsigned int m_uiControllerVertcount;
 
+	GLuint m_glMarkerBoxVertBuffer;
+	GLuint m_unMarkerBoxVAO;
+	unsigned int m_uiMarkerBoxVertcount;
+
 	Matrix4 m_mat4HMDPose;
 	Matrix4 m_mat4eyePosLeft;
 	Matrix4 m_mat4eyePosRight;
@@ -219,6 +223,7 @@ private: // OpenGL bookkeeping
 
 	GLint m_nSceneMatrixLocation;
 	GLint m_nControllerMatrixLocation;
+	GLint m_nMarkerBoxMatrixLocation;
 	GLint m_nRenderModelMatrixLocation;
 
 	struct FramebufferDesc
@@ -355,9 +360,12 @@ CMainApplication::CMainApplication( int argc, char *argv[] )
 	, m_bGlFinishHack( true )
 	, m_glControllerVertBuffer( 0 )
 	, m_unControllerVAO( 0 )
+	, m_glMarkerBoxVertBuffer( 0 )
+	, m_unMarkerBoxVAO( 0 )
 	, m_unSceneVAO( 0 )
 	, m_nSceneMatrixLocation( -1 )
 	, m_nControllerMatrixLocation( -1 )
+	, m_nMarkerBoxMatrixLocation( -1 )
 	, m_nRenderModelMatrixLocation( -1 )
 	, m_iTrackedControllerCount( 0 )
 	, m_iTrackedControllerCount_Last( -1 )
@@ -684,6 +692,10 @@ void CMainApplication::Shutdown()
 		{
 			glDeleteVertexArrays( 1, &m_unControllerVAO );
 		}
+		if (m_unMarkerBoxVAO != 0)
+		{
+			glDeleteVertexArrays(1, &m_unMarkerBoxVAO);
+		}
 	}
 
 	if( m_pCompanionWindow )
@@ -817,11 +829,12 @@ void CMainApplication::RunMainLoop()
 
 	while ( !bQuit )
 	{
+		bQuit = HandleInput();
+
 		const float speed = 0.1 * m_vAnalogValue[1]; // TODO: scale with elapsed time!!!
 		m_mat4GlobalTranslation[12] -= speed * m_rHand[EHand::Right].m_vecPointingDirection.x;
 		m_mat4GlobalTranslation[13] -= speed * m_rHand[EHand::Right].m_vecPointingDirection.y;
 		m_mat4GlobalTranslation[14] -= speed * m_rHand[EHand::Right].m_vecPointingDirection.z;
-		bQuit = HandleInput();
 
 		RenderFrame();
 	}
@@ -1038,6 +1051,15 @@ bool CMainApplication::CreateAllShaders()
 		dprintf( "Unable to find matrix uniform in controller shader\n" );
 		return false;
 	}
+
+	// TODO: same location as above? just using the same location instead?
+	m_nMarkerBoxMatrixLocation = glGetUniformLocation(m_unControllerTransformProgramID, "matrix");
+	if (m_nMarkerBoxMatrixLocation == -1)
+	{
+		dprintf("Unable to find matrix uniform in box controller shader\n");
+		return false;
+	}
+	
 
 	m_unRenderModelProgramID = CompileGLShader( 
 		"render model",
@@ -1369,6 +1391,107 @@ void CMainApplication::RenderControllerAxes()
 		//$ TODO: Use glBufferSubData for this...
 		glBufferData( GL_ARRAY_BUFFER, sizeof(float) * vertdataarray.size(), &vertdataarray[0], GL_STREAM_DRAW );
 	}
+
+
+	// Do the same for box marker
+	std::vector<float> boxdataarray;
+	m_uiMarkerBoxVertcount = 0;
+
+	Vector4 bCenter = m_rHand[EHand::Right].m_rmat4Pose * Vector4(0, 0, -0.3, 1); // Active point a bit in front of controller
+	bCenter[0] -= m_mat4GlobalTranslation[12];
+	bCenter[1] -= m_mat4GlobalTranslation[13];
+	bCenter[2] -= m_mat4GlobalTranslation[14];
+	//dprintf("Marker Global \t%f,\t%f,\t%f", bCenter[0], bCenter[1], bCenter[2]);
+
+	// Find the coordinates of the closest box. TODO: take care of m_iSceneVolumeWidth/Height/Depth
+	const float gridSpace = m_fScale * m_fScaleSpacing;
+	const float cubeRadius = .5f * m_fScale;
+	Vector4 closestCenter;
+	closestCenter[0] = round((bCenter[0] - cubeRadius) / gridSpace) * gridSpace + cubeRadius;
+	closestCenter[1] = round((bCenter[1] - cubeRadius) / gridSpace) * gridSpace + cubeRadius;
+	closestCenter[2] = round((bCenter[2] - cubeRadius) / gridSpace) * gridSpace + cubeRadius;
+	closestCenter[3] = 1.f;
+	//dprintf("   Marker Rounded \t%f,\t%f,\t%f\n", closestCenter[0], closestCenter[1], closestCenter[2]);
+
+	float drawSide = 0.05f;
+	if (abs(bCenter[0] - closestCenter[0]) < cubeRadius * 1.5f &&
+		abs(bCenter[1] - closestCenter[1]) < cubeRadius * 1.5f &&
+		abs(bCenter[2] - closestCenter[2]) < cubeRadius * 1.5f)
+	{
+		bCenter = closestCenter;
+		drawSide = 0.35f;
+	}
+
+	for (int i = 0; i < 8; ++i)
+	{
+		//Vector3 color(1.f*(i&1), 0.5f*(i&2), 0.25f*(i&4)/4);
+		Vector3 color(0.f, 0.5f, 1.f);
+		Vector4 point1(
+			drawSide*(1.f * (i & 1)-0.5f),
+			drawSide*(.5f * (i & 2)-0.5f),
+			drawSide*(.25f * (i & 4)-0.5f), 0);
+		point1 = point1 + bCenter;
+		for (int j = 0; j < 8; ++j)
+		{
+			if (j != i)
+			{
+				Vector4 point2(
+					drawSide* (1.f * (j & 1) - 0.5f),
+					drawSide* (.5f * (j & 2) - 0.5f),
+					drawSide* (.25f * (j & 4) - 0.5f), 0);
+				point2 = point2 + bCenter;
+
+				boxdataarray.push_back(point1.x);
+				boxdataarray.push_back(point1.y);
+				boxdataarray.push_back(point1.z);
+
+				boxdataarray.push_back(color.x);
+				boxdataarray.push_back(color.y);
+				boxdataarray.push_back(color.z);
+
+				boxdataarray.push_back(point2.x);
+				boxdataarray.push_back(point2.y);
+				boxdataarray.push_back(point2.z);
+
+				boxdataarray.push_back(color.x);
+				boxdataarray.push_back(color.y);
+				boxdataarray.push_back(color.z);
+
+				m_uiMarkerBoxVertcount += 2;
+			}
+		}
+	}
+
+	// Setup the VAO the first time through.
+	if (m_unMarkerBoxVAO == 0)
+	{
+		glGenVertexArrays(1, &m_unMarkerBoxVAO);
+		glBindVertexArray(m_unMarkerBoxVAO);
+
+		glGenBuffers(1, &m_glMarkerBoxVertBuffer);
+		glBindBuffer(GL_ARRAY_BUFFER, m_glMarkerBoxVertBuffer);
+
+		GLuint stride = 2 * 3 * sizeof(float);
+		uintptr_t offset = 0;
+
+		glEnableVertexAttribArray(0);
+		glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (const void*)offset);
+
+		offset += sizeof(Vector3);
+		glEnableVertexAttribArray(1);
+		glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride, (const void*)offset);
+
+		glBindVertexArray(0);
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, m_glMarkerBoxVertBuffer);
+
+	// set vertex data if we have some
+	if (boxdataarray.size() > 0)
+	{
+		//$ TODO: Use glBufferSubData for this...
+		glBufferData(GL_ARRAY_BUFFER, sizeof(float) * boxdataarray.size(), &boxdataarray[0], GL_STREAM_DRAW);
+	}
 }
 
 
@@ -1550,11 +1673,11 @@ void CMainApplication::RenderScene( vr::Hmd_Eye nEye )
 {
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	glEnable(GL_DEPTH_TEST);
+	Matrix4 viewProjWithGlobal = GetCurrentViewProjectionMatrix(nEye) * m_mat4GlobalTranslation;
 
 	if( m_bShowCubes )
 	{
 		glUseProgram( m_unSceneProgramID );
-		Matrix4 viewProjWithGlobal = GetCurrentViewProjectionMatrix(nEye) * m_mat4GlobalTranslation;
 		glUniformMatrix4fv( m_nSceneMatrixLocation, 1, GL_FALSE, viewProjWithGlobal.get() );
 		glBindVertexArray( m_unSceneVAO );
 		glBindTexture( GL_TEXTURE_2D, m_iTexture );
@@ -1572,6 +1695,13 @@ void CMainApplication::RenderScene( vr::Hmd_Eye nEye )
 		glBindVertexArray( m_unControllerVAO );
 		glDrawArrays( GL_LINES, 0, m_uiControllerVertcount );
 		glBindVertexArray( 0 );
+
+		// draw the marker box lines
+		glUseProgram(m_unControllerTransformProgramID);
+		glUniformMatrix4fv(m_nMarkerBoxMatrixLocation, 1, GL_FALSE, viewProjWithGlobal.get());
+		glBindVertexArray(m_unMarkerBoxVAO);
+		glDrawArrays(GL_LINES, 0, m_uiMarkerBoxVertcount);
+		glBindVertexArray(0);
 	}
 
 	// ----- Render Model rendering -----
